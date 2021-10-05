@@ -34,6 +34,7 @@ type EndpointLocator interface {
 	UserManagementEndpoint() (string, error)
 	HpcsEndpoint() (string, error)
 	FunctionsEndpoint() (string, error)
+	SatelliteEndpoint() (string, error)
 }
 
 const (
@@ -76,6 +77,7 @@ var privateRegions = map[string][]string{
 	"container":             {"us-south", "us-east", "eu-gb", "eu-de", "jp-tok", "au-syd", "jp-osa", "ca-tor"},
 	"iam":                   {"us-south", "us-east"},
 	"resource":              {"us-south", "us-east"},
+	"satellite":             {"us-south", "us-east", "eu-gb", "eu-de"},
 }
 var cloudEndpoint = "cloud.ibm.com"
 
@@ -107,19 +109,19 @@ type endpointLocator struct {
 //NewEndpointLocator ...
 func NewEndpointLocator(region, visibility, file string) EndpointLocator {
 	var fileMap map[string]interface{}
-	if f := helpers.EnvFallBack([]string{"IBMCLOUD_ENDPOINTS_FILE", "IC_ENDPOINTS_FILE"}, file); f != "" {
+	if f := helpers.EnvFallBack([]string{"IBMCLOUD_ENDPOINTS_FILE_PATH", "IC_ENDPOINTS_FILE_PATH"}, file); f != "" {
 		jsonFile, err := os.Open(f)
 		if err != nil {
-			fmt.Printf("Unable to open File %s", err)
+			log.Fatalf("Unable to open endpoints file %s", err)
 		}
 		defer jsonFile.Close()
 		bytes, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
-			fmt.Printf("Unable to read File %s", err)
+			log.Fatalf("Unable to read endpoints file %s", err)
 		}
 		err = json.Unmarshal([]byte(bytes), &fileMap)
 		if err != nil {
-			fmt.Printf("Unable to unmarshal File %s", err)
+			log.Fatalf("Unable to unmarshal endpoints file %s", err)
 		}
 	}
 	return &endpointLocator{region: region, visibility: visibility, endpointsFile: fileMap}
@@ -592,6 +594,31 @@ func (e *endpointLocator) FunctionsEndpoint() (string, error) {
 		return "", bmxerror.New(ErrCodeServiceEndpoint, fmt.Sprintf("Private Endpoints is not supported by this service for the region %s", e.region))
 	}
 	return contructEndpoint(fmt.Sprintf("%s.functions", e.region), cloudEndpoint), nil
+}
+
+func (e *endpointLocator) SatelliteEndpoint() (string, error) {
+	//As the current list of regionToEndpoint above is not exhaustive we allow to read endpoints from the env
+	endpoint := helpers.EnvFallBack([]string{"IBMCLOUD_SAT_API_ENDPOINT"}, "")
+	if endpoint != "" {
+		return endpoint, nil
+	}
+	if e.endpointsFile != nil && e.visibility != "public-and-private" {
+		url := fileFallBack(e.endpointsFile, e.visibility, "IBMCLOUD_SAT_API_ENDPOINT", e.region, "")
+		if url != "" {
+			return url, nil
+		}
+	}
+	if e.visibility == "private" {
+		return contructEndpoint(fmt.Sprintf("private.%s.api.link.satellite", e.region), fmt.Sprintf("%s", cloudEndpoint)), nil
+	}
+	if e.visibility == "public-and-private" {
+		r, err := validateRegion(e.region, privateRegions["satellite"])
+		if err != nil {
+			return contructEndpoint("api.link.satellite", fmt.Sprintf("%s", cloudEndpoint)), nil
+		}
+		return contructEndpoint(fmt.Sprintf("private.%s.api.link.satellite", r), fmt.Sprintf("%s", cloudEndpoint)), nil
+	}
+	return contructEndpoint("api.link.satellite", fmt.Sprintf("%s", cloudEndpoint)), nil
 }
 
 func fileFallBack(fileMap map[string]interface{}, visibility, key, region, defaultValue string) string {
